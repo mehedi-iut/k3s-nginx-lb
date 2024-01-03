@@ -167,11 +167,18 @@ check-master-ip: get-master-ip-by-tag
 	@echo $(MASTER_IP)
 
 install-k3s-master: get-master-ip-by-tag
-	@INSTANCE_IDS=$$(aws ec2 describe-instances --region $(AWS_DEFAULT_REGION) --filters "Name=tag:Name,Values=k3s-master" --query 'Reservations[*].Instances[*].InstanceId' --output text);
-	@while [ "$$(aws ec2 describe-instance-status --region $(AWS_DEFAULT_REGION) --instance-ids $(INSTANCE_IDS) --query 'InstanceStatuses[*].InstanceState.Name' --output text)" != "running" ]; do \
+	@INSTANCE_IDS=$$(aws ec2 describe-instances --region $(AWS_DEFAULT_REGION) --filters "Name=tag:Name,Values=k3s-master" --query 'Reservations[*].Instances[*].InstanceId' --output text); \
+	INSTANCE_STATE=$$(aws ec2 describe-instance-status --region $(AWS_DEFAULT_REGION) --instance-ids $$INSTANCE_IDS --query 'InstanceStatuses[*].InstanceState.Name' --output text); \
+	echo $(AWS_DEFAULT_REGION); \
+	echo $$INSTANCE_IDS; \
+	echo $$INSTANCE_STATE; \
+	\
+	while [ "$$INSTANCE_STATE" != "running" ]; do \
         echo "Waiting for EC2 instances to be in running state..."; \
         sleep 10; \
-    done
+        INSTANCE_STATE=$$(aws ec2 describe-instance-status --region $(AWS_DEFAULT_REGION) --instance-ids $$INSTANCE_IDS --query 'InstanceStatuses[*].InstanceState.Name' --output text); \
+    done; \
+	echo "EC2 is running"
 	@ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) "sudo ufw disable && curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig=/home/ubuntu/.kube/config --write-kubeconfig-mode=644' sh - "
 
 get-token: get-master-ip-by-tag install-k3s-master
@@ -184,6 +191,10 @@ read-text:
 	$(eval TOKEN := $(shell cat token.txt))
 	@echo "Token is: $(TOKEN) " 
 
+sleep-2-min:
+	@echo "Let the security group rule propagate"
+	@sleep 120
+
 # install-worker: aws-vars get-token get-master-ip-by-tag
 #     # @ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(WORKER_IP) "curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -"
 # 	$(eval K3S_TOKEN := $(shell cat token.txt))
@@ -192,18 +203,28 @@ read-text:
 #     	ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(WORKER_IP) "curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -"; \
 #   	done
 
-install-worker-2: aws-vars get-token get-master-ip-by-tag
-	$(eval K3S_TOKEN := $(shell cat token.txt))
-	@echo "The token is: $(K3S_TOKEN)"
-	@for i in $$(seq 1 $(WORKER_COUNT)); do \
+# install-worker-2: aws-vars get-token get-master-ip-by-tag
+# 	$(eval K3S_TOKEN := $(shell cat token.txt))
+# 	@echo "The token is: $(K3S_TOKEN)"
+# 	@for i in $$(seq 1 $(WORKER_COUNT)); do \
+# 		WORKER_IP=$$(aws ec2 describe-instances --filters "Name=tag:Name,Values=k3s-worker-$$i" --query "Reservations[].Instances[].PublicIpAddress" --output text); \
+# 		echo "The Worker-node-$$i: $${WORKER_IP}"; \
+# 		ssh -i $(KEY_PAIR_NAME).pem ubuntu@$${WORKER_IP} "sudo ufw disable && curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -s -"; \
+# 	done
+
+install-worker-2: aws-vars get-master-ip-by-tag
+	@K3S_TOKEN=$$(ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) 'sudo cat /var/lib/rancher/k3s/server/node-token'); \
+	echo "The token is: $$K3S_TOKEN"; \
+	for i in $$(seq 1 $(WORKER_COUNT)); do \
 		WORKER_IP=$$(aws ec2 describe-instances --filters "Name=tag:Name,Values=k3s-worker-$$i" --query "Reservations[].Instances[].PublicIpAddress" --output text); \
-		echo "The Worker-node-$$i: $${WORKER_IP}"; \
-		ssh -i $(KEY_PAIR_NAME).pem ubuntu@$${WORKER_IP} "sudo ufw disable && curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -s -"; \
+		echo "The Worker-node-$$i: $$WORKER_IP"; \
+		ssh -i $(KEY_PAIR_NAME).pem ubuntu@$$WORKER_IP "sudo ufw disable && curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$$K3S_TOKEN sh -s -"; \
 	done
 
 
-
-
+reboot-master:
+	@INSTANCE_IDS=$$(aws ec2 describe-instances --region $(AWS_DEFAULT_REGION) --filters "Name=tag:Name,Values=k3s-master" --query 'Reservations[*].Instances[*].InstanceId' --output text); \
+	aws ec2 reboot-instances --instance-ids $$INSTANCE_IDS
 
 create-aws-resources-%:
 	make create-vpc-$*
@@ -216,6 +237,7 @@ create-aws-resources-%:
 	make create-key-pair
 	make create-security-group-$*
 	make create-instances-$*
+	make sleep-2-min
 	make install-k3s-master
-	make get-token
 	make install-worker-2
+	make reboot-master
