@@ -5,14 +5,11 @@ SUBNET_CIDR ?= 10.10.1.0/24
 KEY_PAIR_NAME ?= poridhi
 SECURITY_GROUP_NAME ?= poridhi
 WORKER_COUNT = 2
+AWS_DEFAULT_REGION = us-east-1
 
 aws-vars:
 ifndef AWS_DEFAULT_REGION
 	$(error AWS_DEFAULT_REGION is not set)
-else ifndef AWS_ACCESS_KEY_ID
-	$(error AWS_ACCESS_KEY_ID is not set)
-else ifndef AWS_SECRET_ACCESS_KEY
-	$(error AWS_SECRET_ACCESS_KEY is not set)
 else ifndef VPC_CIDR
 	$(error VPC_CIDR is not set)
 endif
@@ -135,33 +132,24 @@ create-instances-%: aws-vars get-security-group-id-by-tag-% get-subnet-id-by-tag
 	@for i in $(shell seq 1 $(WORKER_COUNT)); do \
     	aws ec2 run-instances --image-id ami-0c7217cdde317cfec --count 1 \
        	--tag-specifications "[{\"ResourceType\":\"instance\",\"Tags\":[{\"Key\":\"Name\",\"Value\":\"k3s-worker-$$i\"}]}]" \
-       	--instance-type t2.micro --key-name $(KEY_PAIR_NAME) \
+       	--instance-type t2.medium --key-name $(KEY_PAIR_NAME) \
        	--security-group-ids $(SECURITY_GROUP_ID) \
        	--subnet-id $(SUBNET_ID) \
        	--associate-public-ip-address; \
 	done
-   
+
 	@aws ec2 run-instances --image-id ami-0c7217cdde317cfec --count 1 \
      --tag-specifications "[{\"ResourceType\":\"instance\",\"Tags\":[{\"Key\":\"Name\",\"Value\":\"k3s-master\"}]}]" \
-     --instance-type t2.micro --key-name $(KEY_PAIR_NAME) --security-group-ids $(SECURITY_GROUP_ID) \
+     --instance-type t2.medium --key-name $(KEY_PAIR_NAME) --security-group-ids $(SECURITY_GROUP_ID) \
      --subnet-id $(SUBNET_ID) \
      --associate-public-ip-address;
-     
+
 	@aws ec2 run-instances --image-id ami-0c7217cdde317cfec --count 1 \
      --tag-specifications "[{\"ResourceType\":\"instance\",\"Tags\":[{\"Key\":\"Name\",\"Value\":\"lb\"}]}]" \
      --instance-type t2.micro --key-name $(KEY_PAIR_NAME) --security-group-ids $(SECURITY_GROUP_ID) \
      --subnet-id $(SUBNET_ID) \
      --associate-public-ip-address;
 
-# create-worker-instances-%: aws-vars get-security-group-id-by-tag-% get-subnet-id-by-tag-%
-# 	@for i in $(shell seq 1 $(WORKER_COUNT)); do \
-#     	aws ec2 run-instances --image-id ami-0c7217cdde317cfec --count 1 \
-#        	--tag-specifications "[{\"ResourceType\":\"instance\",\"Tags\":[{\"Key\":\"Name\",\"Value\":\"k3s-worker-$$i\"}]}]" \
-#        	--instance-type t2.micro --key-name $(KEY_PAIR_NAME) \
-#        	--security-group-ids $(SECURITY_GROUP_ID) \
-#        	--subnet-id $(SUBNET_ID) \
-#        	--associate-public-ip-address; \
-# 	done
 
 check-master-ip: get-master-ip-by-tag
 	@echo $(MASTER_IP)
@@ -195,23 +183,6 @@ sleep-2-min:
 	@echo "Let the security group rule propagate"
 	@sleep 120
 
-# install-worker: aws-vars get-token get-master-ip-by-tag
-#     # @ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(WORKER_IP) "curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -"
-# 	$(eval K3S_TOKEN := $(shell cat token.txt))
-# 	for i in $(shell seq 1 $(WORKER_COUNT)); do \
-#     	$(eval WORKER_IP := $(shell aws ec2 describe-instances --filters "Name=tag:Name,Values=k3s-worker-$$i" --query "Reservations[].Instances[].PublicIpAddress" --output text)); \
-#     	ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(WORKER_IP) "curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -"; \
-#   	done
-
-# install-worker-2: aws-vars get-token get-master-ip-by-tag
-# 	$(eval K3S_TOKEN := $(shell cat token.txt))
-# 	@echo "The token is: $(K3S_TOKEN)"
-# 	@for i in $$(seq 1 $(WORKER_COUNT)); do \
-# 		WORKER_IP=$$(aws ec2 describe-instances --filters "Name=tag:Name,Values=k3s-worker-$$i" --query "Reservations[].Instances[].PublicIpAddress" --output text); \
-# 		echo "The Worker-node-$$i: $${WORKER_IP}"; \
-# 		ssh -i $(KEY_PAIR_NAME).pem ubuntu@$${WORKER_IP} "sudo ufw disable && curl -sfL https://get.k3s.io | K3S_URL=https://$(MASTER_IP):6443 K3S_TOKEN=$(K3S_TOKEN) sh -s -"; \
-# 	done
-
 install-worker-2: aws-vars get-master-ip-by-tag
 	@K3S_TOKEN=$$(ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) 'sudo cat /var/lib/rancher/k3s/server/node-token'); \
 	echo "The token is: $$K3S_TOKEN"; \
@@ -225,6 +196,11 @@ install-worker-2: aws-vars get-master-ip-by-tag
 reboot-master:
 	@INSTANCE_IDS=$$(aws ec2 describe-instances --region $(AWS_DEFAULT_REGION) --filters "Name=tag:Name,Values=k3s-master" --query 'Reservations[*].Instances[*].InstanceId' --output text); \
 	aws ec2 reboot-instances --instance-ids $$INSTANCE_IDS
+
+associate-elastic-ip-lb: aws-vars
+	@ELASTIC_IP_LB=$$(aws ec2 allocate-address --domain vpc --query 'AllocationId' --output text); \
+	LB_INSTANCE_ID=$$(aws ec2 describe-instances --region $(AWS_DEFAULT_REGION) --filters "Name=tag:Name,Values=lb" --query 'Reservations[*].Instances[*].InstanceId' --output text); \
+	aws ec2 associate-address --instance-id $$LB_INSTANCE_ID --allocation-id $$ELASTIC_IP_LB;
 
 create-aws-resources-%:
 	make create-vpc-$*
@@ -241,3 +217,4 @@ create-aws-resources-%:
 	make install-k3s-master
 	make install-worker-2
 	make reboot-master
+	make associate-elastic-ip-lb
