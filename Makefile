@@ -167,7 +167,7 @@ install-k3s-master: get-master-ip-by-tag
         INSTANCE_STATE=$$(aws ec2 describe-instance-status --region $(AWS_DEFAULT_REGION) --instance-ids $$INSTANCE_IDS --query 'InstanceStatuses[*].InstanceState.Name' --output text); \
     done; \
 	echo "EC2 is running"
-	@ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) "sudo ufw disable && curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig=/home/ubuntu/.kube/config --write-kubeconfig-mode=644' sh - "
+	@ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) "sudo ufw disable && curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--tls-san $(MASTER_IP) --write-kubeconfig=/home/ubuntu/.kube/config --write-kubeconfig-mode=644' sh - "
 
 get-token: get-master-ip-by-tag install-k3s-master
 	@ssh -i $(KEY_PAIR_NAME).pem ubuntu@$(MASTER_IP) 'sudo cat /var/lib/rancher/k3s/server/node-token' > token.txt

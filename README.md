@@ -3,6 +3,9 @@
 In this repo, I have created a Makefile to create 4 ec2 vm in AWS. 3 used for k3s and 1 for LoadBalancing with L7 nginx.
 Among 3 k3s vm, one will be master and 2 will worker.
 
+### Important
+when configure aws using ```aws configure``` then output format must be **json**, otherwise **Makefile** will not work
+
 Request will come to LB VM and from that vm request will forwarded into any two of the worker vm where the pod is running the application
 
 ![plot](./k3s_with_nginx.png)
