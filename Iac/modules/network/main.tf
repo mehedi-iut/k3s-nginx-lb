@@ -83,7 +83,7 @@ resource "aws_route_table_association" "rt_association" {
 
 
 resource "aws_main_route_table_association" "public_rt" {
-  vpc_id = aws_vpc.poridhi_vpc.id
+  vpc_id         = aws_vpc.poridhi_vpc.id
   route_table_id = aws_route_table.public_rt.id
 }
 
